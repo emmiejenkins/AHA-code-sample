@@ -1,0 +1,89 @@
+
+
+title "Sashelp.bweight --- Infant Birth Weight";
+data birthwgt; set sashelp.birthwgt; run;
+proc contents data=birthwgt varnum;
+ods select position;
+run;
+title "The First Five Observations Out of 100,000";
+proc print data=birthwgt(obs=5);
+run;
+
+*Create a new smaller data set;
+title 'New Sample of Size 5,000';
+proc surveyselect data=birthwgt out=new2 method=srs n=5000
+                  seed=2021;
+
+run;
+
+data new; set birthwgt; if death = 'Yes'; run;
+/*merge the two files into one */
+data new_bwgt; set new new2; run;
+
+*finding missing data;
+proc format;
+ value $missfmt ' '='Missing' other='Not Missing';
+ value  missfmt  . ='Missing' other='Not Missing';
+run;
+ 
+title "Couting missing values by Category";
+proc freq data=new_bwgt; 
+format _CHAR_ $missfmt.; /* apply format for the duration of this PROC */
+tables _CHAR_ / missing missprint nocum nopercent;
+format _NUMERIC_ missfmt.;
+tables _NUMERIC_ / missing missprint nocum nopercent;
+run;
+
+*splittting into train and test;
+data temp; 
+set new_bwgt; 
+n=ranuni(100); 
+run; 
+
+proc sort data=temp; by n;
+
+data training testing; 
+set temp nobs=nobs; 
+if _n_<=.75*nobs then output training; 
+else output testing; 
+run;
+
+*cart;
+
+proc  hpsplit  data=training  seed =123;
+class death lowbirthwgt married race drinking smoking somecollege;
+model death = lowbirthwgt married agegroup race drinking smoking somecollege;
+partition fraction(validate=0.3  seed =1234);
+grow  entropy ;
+prune  costcomplexity; 
+run;
+
+*rf;
+proc  hpforest  data=training  maxtrees = 200 INBAGFRACTION = .3;
+	input  agegroup / level=interval;
+	input lowbirthwgt married drinking smoking somecollege/ level = binary;
+	input race/ level= nominal;
+	target death/level = binary;
+	score
+out = ldata.score; 
+	* save file = ldata;
+	ods output FitStatistics=fitstats(rename=(Ntrees=Trees));
+run;
+data  fitstats ;
+	set  fitstats ;
+	label  Trees ='Number of  Trees';
+	label  MiscAll ='Full  Data';
+	label  Miscoob ='OOB';
+run ;
+proc  sgplot  data=fitstats;
+	title  "OOB vs  Training ";
+	series  x=Trees y=MiscAll;
+	series  x=Trees y=MiscOob/ lineattrs =(pattern=shortdash  thickness =2);
+	yaxis  label ='Misclassification  Rate';
+run ;
+	title2 'Predicted  Survival';
+proc  sgplot  data=ldata . score ;
+	vbox P_Survived0/group=survived ;
+run;
+
+/*Random forest identifies lowbirthwgt as the most important predictor variable for the death event, with a OOB margin of .105, and CART identified lowbirthwgt to be the most important variable as well, followed by race and then drinking */
